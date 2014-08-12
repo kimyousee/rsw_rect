@@ -27,7 +27,7 @@ def cheb(N):
 
 def fd2(N):
     if N==0: D=0; x=1; return
-    x = np.linspace(-1,1,N+1) #double check syntax
+    x = np.linspace(-1,1,N+1)
     h = 2./N
     e = np.ones(N+1)
 
