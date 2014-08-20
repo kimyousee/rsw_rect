@@ -1,11 +1,11 @@
 import numpy as np
 import numpy.linalg as nlg
-import scipy
 import scipy.sparse as sp
 from scipy.misc import factorial
 import scipy.linalg as spalg
 from scipy.sparse.linalg import eigs
 import matplotlib.pyplot as plt
+from FinDif import FiniteDiff
 import os
 
 ## numpy version of rsw_rect_reduced.m
@@ -28,24 +28,6 @@ def cheb(N):
         D  = D - np.diag(np.sum(D,1))   # diagonal entries
     return D,x
 
-def fd2(N):
-    if N==0: D=0; x=1; return
-    x = np.linspace(-1,1,N+1) #double check syntax
-    h = 2./N
-    e = np.ones(N+1)
-
-    data = np.array([-1*e, 0*e, e])/(2*h)
-    D = sp.spdiags(data, [-1, 0, 1], N+1,N+1).todense()
-    D[0, 0:2] = np.array([-1, 1])/h
-    D[N, N-1:N+1] = np.array([-1, 1])/h
-    sp.dia_matrix(D)
-
-    D2 = sp.spdiags(np.array([e, -2*e, e])/h**2, [-1, 0, 1], N+1, N+1).todense()
-    D2[0, 0:3] = np.array([1, -2, 1])/h**2
-    D2[N, N-2:N+1] = np.array([1,-2,1])/h**2
-    sp.dia_matrix(D2)
-    return D, D2, x
-
 def rsw_rect(grid):
     # For writing eigenvalues, eigenvectors, and data to files
     OutpDir = "storage"
@@ -67,31 +49,40 @@ def rsw_rect(grid):
     Nx = grid[0]
     Ny = grid[1]
 
-    xMethod = 'cheb'
-    xOrd    = 2
-    yMethod = 'cheb'
-    yOrd    = 2
+    diff_typex  = 'FD' # `Cheb'yschev differentiation of `FD' (finite difference)
+    diff_ordx   = 2 # Order for finite difference differentiation
+    diff_typey  = 'FD' # `Cheb'yschev differentiation of `FD' (finite difference)
+    diff_ordy   = 2 # Order for finite difference differentiation
 
-    if xMethod == 'cheb':
+    # x derivative
+    if diff_typex == 'cheb':
         Dx,x = cheb(Nx)
-    else:
-        [Dx,Dx2,x]  = fd2(Nx)
-    x  = Lx/2*x
-    Dx = 2/Lx*Dx
+        x    = Lx/2*x
+        Dx   = 2/Lx*Dx
+    elif diff_typex == 'FD':
+        x   = np.linspace(Lx/2,-Lx/2,Nx+1)
+        Dx  = FiniteDiff(x, diff_ordx, True, True)
 
-    if yMethod == 'cheb':
+    # y derivative
+    if diff_typey == 'cheb':
         Dy,y = cheb(Ny)
-    else:
-        [Dy,Dy2,y]  = fd2(Ny)
-    y  = Ly/2*y
-    Dy = 2/Ly*Dy
+        y    = Ly/2*y
+        Dy   = 2/Ly*Dy
+    elif diff_typey == 'FD':
+        y   = np.linspace(Ly/2, -Ly/2, Ny+1)
+        Dy  = FiniteDiff(y, diff_ordy, True, True)
 
     # Define Differentiation Matrices using kronecker product
-
-    F = np.kron(np.diag(np.ravel(f0+beta*y)), np.eye(Nx+1))
-    Z = np.zeros([(Nx+1)*(Ny+1),(Nx+1)*(Ny+1)])
-    DX = np.kron(np.eye(Ny+1), Dx)
-    DY = np.kron(Dy, np.eye(Nx+1))
+    if diff_typex == 'cheb':
+        F = np.kron(np.diag(np.ravel(f0+beta*y)), np.eye(Nx+1))
+        Z = np.zeros([(Nx+1)*(Ny+1),(Nx+1)*(Ny+1)])
+        DX = np.kron(np.eye(Ny+1), Dx)
+        DY = np.kron(Dy, np.eye(Nx+1))
+    else:
+        F = sp.kron(np.diag(np.ravel(f0+beta*y)), np.eye(Nx+1),format='csr')
+        Z = sp.lil_matrix(((Nx+1)*(Ny+1),(Nx+1)*(Ny+1)))
+        DX = sp.kron(np.eye(Ny+1), Dx,format='csr')
+        DY = sp.kron(Dy, np.eye(Nx+1),format='csr')
 
     # Sx and Sy are used to select which rows/columns need to be
     # deleted for the boundary conditions.
@@ -110,16 +101,23 @@ def rsw_rect(grid):
     Fy  =  F[Sy,:];  Zy =  Z[Sy,:]
     Fyx = Fy[:,Sx]; Zyy = Zy[:,Sy]
 
-    A0 = np.hstack([Zxx,          Fxy,        -g*DX[Sx,:]])
-    A1 = np.hstack([-Fyx,         Zyy,        -g*DY[Sy,:]])
-    A2 = np.hstack([-H*DX[:,Sx], -H*DY[:,Sy],  Z])
-
-    #size = (Nx-1)(Ny+1)+(Nx+1)(Ny-1)+(Nx+1)(Ny+1) = 3*Nx*Ny + Ny + Nx + 1  ^2
-    A = np.vstack([A0,A1,A2])
-    # B = np.eye(A.shape[0])
+    if diff_typex == 'cheb':
+        A0 = np.hstack([Zxx,          Fxy,        -g*DX[Sx,:]])
+        A1 = np.hstack([-Fyx,         Zyy,        -g*DY[Sy,:]])
+        A2 = np.hstack([-H*DX[:,Sx], -H*DY[:,Sy],  Z])
+        #size(A) = (Nx-1)(Ny+1)+(Nx+1)(Ny-1)+(Nx+1)(Ny+1) = 3*Nx*Ny + Ny + Nx + 1  ^2
+        A = np.vstack([A0,A1,A2])
+    else:
+        A0 = sp.hstack([Zxx,          Fxy,        -g*DX[Sx,:]])
+        A1 = sp.hstack([-Fyx,         Zyy,        -g*DY[Sy,:]])
+        A2 = sp.hstack([-H*DX[:,Sx], -H*DY[:,Sy],  Z])
+        A = sp.vstack([A0,A1,A2])
 
     # Using eig
-    eigVals, eigVecs = spalg.eig(1j*A)
+    if diff_typex=='cheb':
+        eigVals, eigVecs = spalg.eig(1j*A)
+    else:
+        eigVals, eigVecs = spalg.eig(1j*A.todense())
     ind = (np.real(eigVals)).argsort() #get indices in ascending order
     eigVecs = eigVecs[:,ind]
     eigVals = eigVals[ind]
