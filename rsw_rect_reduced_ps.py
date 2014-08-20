@@ -3,20 +3,17 @@ slepc4py.init(sys.argv)
 from petsc4py import PETSc
 from slepc4py import SLEPc
 import numpy as np
-import numpy.linalg as nlg
 import matplotlib.pyplot as plt
-import scipy
 import scipy.sparse as sp
-from scipy.misc import factorial
-import scipy.linalg as spalg
-from scipy.sparse.linalg import eigs
+from FinDif import FiniteDiff
 import time
+
 
 rank = PETSc.COMM_WORLD.Get_rank()
 Print = PETSc.Sys.Print
 size = PETSc.COMM_WORLD.Get_size()
 
-## petsc4py version of rsw_rect_reduced.m 
+## petsc4py version of rsw_rect_reduced.m, also shows plots at the end
 ## (also uses some numpy/scipy for setup matrices)
 ## Builds A from nonzero values; can also use cheb or fd2
 
@@ -35,24 +32,6 @@ def cheb(N):
         D  = (c*(1/c).conj().transpose())/(dX+(np.eye(N+1)))   # off-diagonal entries
         D  = D - np.diag(np.sum(D,1))   # diagonal entries
     return D,x
-
-def fd2(N):
-    if N==0: D=0; x=1; return
-    x = np.linspace(-1,1,N+1)
-    h = 2./N
-    e = np.ones(N+1)
-
-    data = np.array([-1*e, 0*e, e])/(2*h)
-    D = sp.spdiags(data, [-1, 0, 1], N+1,N+1).todense()
-    D[0, 0:2] = np.array([-1, 1])/h
-    D[N, N-1:N+1] = np.array([-1, 1])/h
-    sp.dia_matrix(D)
-
-    D2 = sp.spdiags(np.array([e, -2*e, e])/h**2, [-1, 0, 1], N+1, N+1).todense()
-    D2[0, 0:3] = np.array([1, -2, 1])/h**2
-    D2[N, N-2:N+1] = np.array([1,-2,1])/h**2
-    sp.dia_matrix(D2)
-    return D, D2, x
 
 def build_A(Nx,Ny,Zx,Zxx,gDX,Fxy,Fyx,gDY,HDX,HDY):
 
@@ -106,6 +85,12 @@ def assignNonzeros(A,submat,br,bc):
     return A
 
 def rsw_rect(grid, nEV):
+    t0 = time.time()
+
+    diff_typex  = 'FD' # `Cheb'yschev differentiation of `FD' (finite difference)
+    diff_ordx   = 2 # Order for finite difference differentiation
+    diff_typey  = 'FD' # `Cheb'yschev differentiation of `FD' (finite difference)
+    diff_ordy   = 2 # Order for finite difference differentiation
 
     H    = 5e2            # Fluid Depth
     beta = 2e-11          # beta parameter
@@ -117,28 +102,35 @@ def rsw_rect(grid, nEV):
     Nx = grid[0]
     Ny = grid[1]
 
-    # # For fd2
-    # [Dx,Dx2,x]  = fd2(Nx);        [Dy,Dy2,y]  = fd2(Ny)
-    # x           = Lx/2*x;         y           = Ly/2*y
-    # Dx          = 2/Lx*Dx;        Dy          = 2/Ly*Dy
-    # Dx2         = (2/Lx)**2*Dx2;  Dy2         = (2/Ly)**2*Dy2
-
-    # For cheb
     # x derivative
-    Dx,x = cheb(Nx)
-    x    = Ly/2*x
-    Dx   = 2/Lx*Dx
+    if diff_typex == 'cheb':
+        Dx,x = cheb(Nx)
+        x    = Lx/2*x
+        Dx   = 2/Lx*Dx
+    elif diff_typex == 'FD':
+        x   = np.linspace(Lx/2,-Lx/2,Nx+1)
+        Dx  = FiniteDiff(x, diff_ordx, True, True)
+
     # y derivative
-    Dy,y = cheb(Ny)
-    y    = Ly/2*y
-    Dy   = 2/Ly*Dy
+    if diff_typey == 'cheb':
+        Dy,y = cheb(Ny)
+        y    = Ly/2*y
+        Dy   = 2/Ly*Dy
+    elif diff_typey == 'FD':
+        y   = np.linspace(Ly/2, -Ly/2, Ny+1)
+        Dy  = FiniteDiff(y, diff_ordy, True, True)
 
     # Define Differentiation Matrices using kronecker product
-
-    F = np.kron(np.diag(np.ravel(f0+beta*y)), np.eye(Nx+1))
-    Z = np.zeros([(Nx+1)*(Ny+1),(Nx+1)*(Ny+1)])
-    DX = np.kron(np.eye(Ny+1), Dx)
-    DY = np.kron(Dy, np.eye(Nx+1))
+    if diff_typex == 'cheb':
+        F = np.kron(np.diag(np.ravel(f0+beta*y)), np.eye(Nx+1))
+        Z = np.zeros([(Nx+1)*(Ny+1),(Nx+1)*(Ny+1)])
+        DX = np.kron(np.eye(Ny+1), Dx)
+        DY = np.kron(Dy, np.eye(Nx+1))
+    else:
+        F = sp.kron(np.diag(np.ravel(f0+beta*y)), np.eye(Nx+1),format='csr')
+        Z = sp.lil_matrix(((Nx+1)*(Ny+1),(Nx+1)*(Ny+1)))
+        DX = sp.kron(np.eye(Ny+1), Dx,format='csr')
+        DY = sp.kron(Dy, np.eye(Nx+1),format='csr')
 
     # Sx and Sy are used to select which rows/columns need to be
     # deleted for the boundary conditions.
@@ -162,21 +154,27 @@ def rsw_rect(grid, nEV):
     HDX = -H*DX[:,Sx]
     HDY = -H*DY[:,Sy]
 
+    t1 = time.time()
+    print "before A: ", t1 - t0
     A = build_A(Nx,Ny,Zx,Zxx,gDX,Fxy,Fyx,gDY,HDX,HDY)
+    t2 = time.time()
+    print "After build: ", t2-t1
 
     E = SLEPc.EPS(); E.create(comm=SLEPc.COMM_WORLD)
     E.setOperators(1j*A); E.setDimensions(nEV, SLEPc.DECIDE)
     # E.setType(SLEPc.EPS.Type.LAPACK)
     E.setProblemType(SLEPc.EPS.ProblemType.NHEP);E.setFromOptions()
     E.setWhichEigenpairs(SLEPc.EPS.Which.SMALLEST_REAL)
-    E.setTolerances(1e-8,max_it=200)
+    E.setTolerances(1e-9,max_it=150)
 
     E.solve()
+    print "after E solve: ", time.time()-t2
 
     nconv = E.getConverged()
     vr, wr = A.getVecs()
     vi, wi = A.getVecs()
     freq = np.zeros([nEV])
+    grow = np.zeros([nEV])
 
     if nconv <= nEV: evals = nconv
     else: evals = nEV
@@ -197,78 +195,97 @@ def rsw_rect(grid, nEV):
 
         if rank == 0:
             # store eigenvector in numpy array
+
             for j in range(0,vrSeq.getSize()):
                 eigVecs[j,i] = vrSeq[j].real+vrSeq[j].imag*1j
             freq[i] = eigVal.real
+            grow[i] = eigVal.imag
+            # print eigVal
+
+    print "First 5 eigenvalues:"
+    posReal = eigVals[eigVals.real>1e-10]
+    print posReal[0:5]
 
     if rank == 0:
-        print "First 5 eigenvalues:"
-        posReal = eigVals[eigVals.real>1e-10]
-        print posReal[0:5]
-
         omega = eigVals.real
         fieldNames = ["u_x", "u_y", "eta"]
         nsol = eigVecs.shape[1]
         
         fields = np.empty(3,dtype='object')
-        # fields = [np.reshape(eigVecs[0:(Nx-1)*(Ny+1),:], [Nx-1,Ny+1,nsol]), \
-        #           np.reshape(eigVecs[(Nx-1)*(Ny+1):2*Nx*Ny-2,:], [Nx+1, Ny-1, nsol]), \
-        #           np.reshape(eigVecs[2*Nx*Ny-2:,:], [Nx+1, Ny+1, nsol])]
         fields = [np.reshape(eigVecs[0:(Nx-1)*(Ny+1),:], [Ny+1,Nx-1,nsol]), \
                   np.reshape(eigVecs[(Nx-1)*(Ny+1):2*Nx*Ny-2,:], [Ny-1, Nx+1, nsol]), \
                   np.reshape(eigVecs[2*Nx*Ny-2:,:],   [Nx+1, Ny+1, nsol])]
+
+        if rank == 0:
+            plt.plot(np.arange(0,freq.shape[0]), freq[:], 'o')
+            plt.title("petsc4py/slepc4py Plot of Real Part of Eigenvalues")
+    
+        plt.show()
 
         om = omega.real
         om[om<=f0] = np.Inf
         ii = (abs(om.real)).argmin(0)
         for i in range(ii-2,ii+9):
+        # for i in range(200,211):
             uf = fields[0]; u = np.squeeze(uf[:,:,i])
             vf = fields[1]; v = np.squeeze(vf[:,:,i])
             hf = fields[2]; h = np.squeeze(hf[:,:,i])
 
-            # u = np.vstack([np.zeros([1,Ny+1]), u, np.zeros([1,Ny+1])])
-            # v = np.hstack([np.zeros([Nx+1,1]), v, np.zeros([Nx+1,1])])
             v = np.vstack([np.zeros([1,Nx+1]), v, np.zeros([1,Nx+1])])
             u = np.hstack([np.zeros([Ny+1,1]), u, np.zeros([Ny+1,1])])
 
             X, Y = np.meshgrid(x,y)
 
+            fig = plt.figure()
             plt.subplot(3,2,1)
-            plt.contourf(X/1e3,Y/1e3,(u.real).conj().transpose(), 20)
-            plt.colorbar()
+            plt.tight_layout(w_pad=2.5)
+            plt.contourf(X/1e3,Y/1e3,u.real, 20)
+            rcbar = plt.colorbar(format='%.1e')
+            cl = plt.getp(rcbar.ax,'ymajorticklabels')
+            plt.setp(cl,fontsize=8)
 
             plt.subplot(3,2,2)
-            plt.contourf(X/1e3,Y/1e3,(u.imag).conj().transpose(), 20)
-            plt.colorbar()
+            plt.contourf(X/1e3,Y/1e3,u.imag, 20)
+            rcbar = plt.colorbar(format='%.1e')
+            cl = plt.getp(rcbar.ax,'ymajorticklabels')
+            plt.setp(cl,fontsize=8)
 
             plt.subplot(3,2,3)
-            plt.contourf(X/1e3,Y/1e3,(v.real).conj().transpose(), 20)
-            plt.colorbar()
+            plt.contourf(X/1e3,Y/1e3,v.real, 20)
+            rcbar = plt.colorbar(format='%.1e')
+            cl = plt.getp(rcbar.ax,'ymajorticklabels')
+            plt.setp(cl,fontsize=8)
 
             plt.subplot(3,2,4)
-            plt.contourf(X/1e3,Y/1e3,(v.imag).conj().transpose(), 20)
-            plt.colorbar()
+            plt.contourf(X/1e3,Y/1e3,v.imag, 20)
+            rcbar = plt.colorbar(format='%.1e')
+            cl = plt.getp(rcbar.ax,'ymajorticklabels')
+            plt.setp(cl,fontsize=8)
 
             plt.subplot(3,2,5)
-            plt.contourf(X/1e3,Y/1e3,(h.real).conj().transpose(), 20)
-            plt.colorbar()
+            plt.contourf(X/1e3,Y/1e3,h.real, 20)
+            rcbar = plt.colorbar(format='%.1e')
+            cl = plt.getp(rcbar.ax,'ymajorticklabels')
+            plt.setp(cl,fontsize=8)
 
             plt.subplot(3,2,6)
-            plt.contourf(X/1e3,Y/1e3,(h.imag).conj().transpose(), 20)
-            plt.colorbar()
+            plt.contourf(X/1e3,Y/1e3,h.imag, 20)
+            rcbar = plt.colorbar(format='%.1e')
+            cl = plt.getp(rcbar.ax,'ymajorticklabels')
+            plt.setp(cl,fontsize=8)
+
+            # fig = "figs/RSW_rect_m%d.eps" % i
+            # plt.savefig(fig, format='eps', dpi=1000)
             plt.show()
 
-    #     if rank == 0:
-    #         plt.plot(np.arange(0,freq.shape[0]), freq[:], 'o')
-    #         plt.title("petsc4py/slepc4py Plot of Real Part of Eigenvalues")
-    
-    # plt.show()
 
 if __name__ == '__main__':
     opts = PETSc.Options()
     Nx = opts.getInt('Nx', 10)
     Ny = opts.getInt('Ny', 10)
-    nEV = opts.getInt('nev', 400) # increase with more grid points
+    nEV = opts.getInt('nev', 300) # Increase depending on Nx and Ny
 
     grid = np.array([Nx,Ny])
     rsw_rect(grid,nEV)
+
+
