@@ -3,11 +3,12 @@ import numpy.linalg as nlg
 import scipy
 import scipy.sparse as sp
 from scipy.misc import factorial
+from FinDif import FiniteDiff
 import scipy.linalg as spalg
 from scipy.sparse.linalg import eigs
 import matplotlib.pyplot as plt
 
-## numpy version of rsw_rect_reduced.m
+## numpy version of rsw_rect_reduced.m. Finds eigenvalues and also plots
 
 # Function for creation of chebyshev differentiation matrices
 # CHEB  compute D = differentiation matrix, x = Chebyshev grid
@@ -25,25 +26,12 @@ def cheb(N):
         D  = D - np.diag(np.sum(D,1))   # diagonal entries
     return D,x
 
-def fd2(N):
-    if N==0: D=0; x=1; return
-    x = np.linspace(-1,1,N+1)
-    h = 2./N
-    e = np.ones(N+1)
-
-    data = np.array([-1*e, 0*e, e])/(2*h)
-    D = sp.spdiags(data, [-1, 0, 1], N+1,N+1).todense()
-    D[0, 0:2] = np.array([-1, 1])/h
-    D[N, N-1:N+1] = np.array([-1, 1])/h
-    sp.dia_matrix(D)
-
-    D2 = sp.spdiags(np.array([e, -2*e, e])/h**2, [-1, 0, 1], N+1, N+1).todense()
-    D2[0, 0:3] = np.array([1, -2, 1])/h**2
-    D2[N, N-2:N+1] = np.array([1,-2,1])/h**2
-    sp.dia_matrix(D2)
-    return D, D2, x
-
 def rsw_rect(grid):
+
+    diff_typex  = 'FD' # `Cheb'yschev differentiation of `FD' (finite difference)
+    diff_ordx   = 2 # Order for finite difference differentiation
+    diff_typey  = 'FD' # `Cheb'yschev differentiation of `FD' (finite difference)
+    diff_ordy   = 2 # Order for finite difference differentiation
 
     H    = 5e2            # Fluid Depth
     beta = 2e-11          # beta parameter
@@ -55,28 +43,35 @@ def rsw_rect(grid):
     Nx = grid[0]
     Ny = grid[1]
 
-    # # Using Finite Difference
-    # [Dx,Dx2,x]  = fd2(Nx);        [Dy,Dy2,y]  = fd2(Ny)
-    # x           = Lx/2*x;         y           = Ly/2*y
-    # Dx          = 2/Lx*Dx;        Dy          = 2/Ly*Dy
-    # Dx2         = (2/Lx)**2*Dx2;  Dy2         = (2/Ly)**2*Dy2
-
-    # Using cheb
     # x derivative
-    Dx,x = cheb(Nx)
-    x    = Ly/2*x
-    Dx   = 2/Lx*Dx
+    if diff_typex == 'cheb':
+        Dx,x = cheb(Nx)
+        x    = Lx/2*x
+        Dx   = 2/Lx*Dx
+    elif diff_typex == 'FD':
+        x   = np.linspace(Lx/2,-Lx/2,Nx+1)
+        Dx  = FiniteDiff(x, diff_ordx, True, True)
+
     # y derivative
-    Dy,y = cheb(Ny)
-    y    = Ly/2*y
-    Dy   = 2/Ly*Dy
+    if diff_typey == 'cheb':
+        Dy,y = cheb(Ny)
+        y    = Ly/2*y
+        Dy   = 2/Ly*Dy
+    elif diff_typey == 'FD':
+        y   = np.linspace(Ly/2, -Ly/2, Ny+1)
+        Dy  = FiniteDiff(y, diff_ordy, True, True)
 
     # Define Differentiation Matrices using kronecker product
-
-    F = np.kron(np.diag(np.ravel(f0+beta*y)), np.eye(Nx+1))
-    Z = np.zeros([(Nx+1)*(Ny+1),(Nx+1)*(Ny+1)])
-    DX = np.kron(np.eye(Ny+1), Dx)
-    DY = np.kron(Dy, np.eye(Nx+1))
+    if diff_typex == 'cheb':
+        F = np.kron(np.diag(np.ravel(f0+beta*y)), np.eye(Nx+1))
+        Z = np.zeros([(Nx+1)*(Ny+1),(Nx+1)*(Ny+1)])
+        DX = np.kron(np.eye(Ny+1), Dx)
+        DY = np.kron(Dy, np.eye(Nx+1))
+    else:
+        F = sp.kron(np.diag(np.ravel(f0+beta*y)), np.eye(Nx+1),format='csr')
+        Z = sp.lil_matrix(((Nx+1)*(Ny+1),(Nx+1)*(Ny+1)))
+        DX = sp.kron(np.eye(Ny+1), Dx,format='csr')
+        DY = sp.kron(Dy, np.eye(Nx+1),format='csr')
 
     # Sx and Sy are used to select which rows/columns need to be
     # deleted for the boundary conditions.
@@ -95,39 +90,46 @@ def rsw_rect(grid):
     Fy  =  F[Sy,:];  Zy =  Z[Sy,:]
     Fyx = Fy[:,Sx]; Zyy = Zy[:,Sy]
 
-    A0 = np.hstack([Zxx,          Fxy,        -g*DX[Sx,:]])
-    A1 = np.hstack([-Fyx,         Zyy,        -g*DY[Sy,:]])
-    A2 = np.hstack([-H*DX[:,Sx], -H*DY[:,Sy],  Z])
+    if diff_typex == 'cheb':
+        A0 = np.hstack([Zxx,          Fxy,        -g*DX[Sx,:]])
+        A1 = np.hstack([-Fyx,         Zyy,        -g*DY[Sy,:]])
+        A2 = np.hstack([-H*DX[:,Sx], -H*DY[:,Sy],  Z])
+        #size(A) = (Nx-1)(Ny+1)+(Nx+1)(Ny-1)+(Nx+1)(Ny+1) = 3*Nx*Ny + Ny + Nx + 1  ^2
+        A = np.vstack([A0,A1,A2])
+    else:
+        A0 = sp.hstack([Zxx,          Fxy,        -g*DX[Sx,:]])
+        A1 = sp.hstack([-Fyx,         Zyy,        -g*DY[Sy,:]])
+        A2 = sp.hstack([-H*DX[:,Sx], -H*DY[:,Sy],  Z])
+        A = sp.vstack([A0,A1,A2])
 
-    #size = (Nx-1)(Ny+1)+(Nx+1)(Ny-1)+(Nx+1)(Ny+1) = 3*Nx*Ny + Ny + Nx + 1  ^2
-    A = np.vstack([A0,A1,A2])
     # B = np.eye(A.shape[0])
 
     # Using eig
-    eigVals, eigVecs = spalg.eig(1j*A)
+    if diff_typex=='cheb':
+        eigVals, eigVecs = spalg.eig(1j*A)
+    else:
+        eigVals, eigVecs = spalg.eig(1j*A.todense())
     ind = (np.real(eigVals)).argsort() #get indices in ascending order
     eigVecs = eigVecs[:,ind]
     eigVals = eigVals[ind]
     omega = eigVals
 
     # # Using eigs
-    # evals_all, evecs_all = eigs(1j*A,80,which='SR',maxiter=500)
-    # print evals_all[0:5]
+    # eigVals, eigVecs = eigs(1j*A,80,which='SR',maxiter=500)
+    # print eigVals[0:5]
     # omega = eigVals
 
     evals = len(eigVals) # how many eigenvalues we have
 
-    # for i in range(evals):
-    #     plt.plot(np.arange(0,evals_all.shape[0]),evals_all[:].real, 'o')
-    #     plt.title("Plot of Real Part of Eigenvalues Using eigs")
+    # plt.plot(np.arange(0,eigVals.shape[0]),eigVals[:].real, 'o')
+    # plt.title("Plot of Real Part of Eigenvalues Using eigs")
     # plt.show()
 
-    # for i in range(evals):
-    #     plt.plot(np.arange(0,eigVals.shape[0]),eigVals[:].real, 'o')
-    #     plt.title("Plot of Real Part of Eigenvalues Using eig")
-    # plt.show()
+    plt.plot(np.arange(0,eigVals.shape[0]),eigVals[:].real, 'o')
+    plt.title("Plot of Real Part of Eigenvalues Using eig")
+    plt.show()
 
-    print "First 5 eigenvalues:"
+    print "First 5 positive eigenvalues (real):"
     posReal = eigVals[eigVals.real>1e-10]
     print posReal[0:5]
 
@@ -144,6 +146,7 @@ def rsw_rect(grid):
     om[om<=f0] = np.Inf
     ii = (abs(om.real)).argmin(0)
     for i in range(ii-2,ii+9):
+    # for i in range(300,311):
         uf = fields[0]; u = np.squeeze(uf[:,:,i])
         vf = fields[1]; v = np.squeeze(vf[:,:,i])
         hf = fields[2]; h = np.squeeze(hf[:,:,i])
@@ -153,31 +156,47 @@ def rsw_rect(grid):
 
         X, Y = np.meshgrid(x,y)
 
+        fig = plt.figure()
         plt.subplot(3,2,1)
-        plt.contourf(X/1e3,Y/1e3,(u.real).conj().transpose(), 20)
-        plt.colorbar()
+        plt.tight_layout(w_pad=2.5)
+        plt.contourf(X/1e3,Y/1e3,u.real, 20)
+        rcbar = plt.colorbar(format='%.1e')
+        cl = plt.getp(rcbar.ax,'ymajorticklabels')
+        plt.setp(cl,fontsize=8)
 
         plt.subplot(3,2,2)
-        plt.contourf(X/1e3,Y/1e3,(u.imag).conj().transpose(), 20)
-        plt.colorbar()
+        plt.contourf(X/1e3,Y/1e3,u.imag, 20)
+        rcbar = plt.colorbar(format='%.1e')
+        cl = plt.getp(rcbar.ax,'ymajorticklabels')
+        plt.setp(cl,fontsize=8)
 
         plt.subplot(3,2,3)
-        plt.contourf(X/1e3,Y/1e3,(v.real).conj().transpose(), 20)
-        plt.colorbar()
+        plt.contourf(X/1e3,Y/1e3,v.real, 20)
+        rcbar = plt.colorbar(format='%.1e')
+        cl = plt.getp(rcbar.ax,'ymajorticklabels')
+        plt.setp(cl,fontsize=8)
 
         plt.subplot(3,2,4)
-        plt.contourf(X/1e3,Y/1e3,(v.imag).conj().transpose(), 20)
-        plt.colorbar()
+        plt.contourf(X/1e3,Y/1e3,v.imag, 20)
+        rcbar = plt.colorbar(format='%.1e')
+        cl = plt.getp(rcbar.ax,'ymajorticklabels')
+        plt.setp(cl,fontsize=8)
 
         plt.subplot(3,2,5)
-        plt.contourf(X/1e3,Y/1e3,(h.real).conj().transpose(), 20)
-        plt.colorbar()
+        plt.contourf(X/1e3,Y/1e3,h.real, 20)
+        rcbar = plt.colorbar(format='%.1e')
+        cl = plt.getp(rcbar.ax,'ymajorticklabels')
+        plt.setp(cl,fontsize=8)
 
         plt.subplot(3,2,6)
-        plt.contourf(X/1e3,Y/1e3,(h.imag).conj().transpose(), 20)
-        plt.colorbar()
+        plt.contourf(X/1e3,Y/1e3,h.imag, 20)
+        rcbar = plt.colorbar(format='%.1e')
+        cl = plt.getp(rcbar.ax,'ymajorticklabels')
+        plt.setp(cl,fontsize=8)
+
+        # fig = "figs/RSW_rect_m%d.eps" % i
+        # plt.savefig(fig, format='eps', dpi=1000)
         plt.show()
-    
 
 if __name__ == '__main__':
     grid = np.array([10,10])
