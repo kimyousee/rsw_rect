@@ -56,7 +56,9 @@ for i in range(ii-2,ii+9):
     X, Y = np.meshgrid(x,y)
 
     fig = plt.figure()
+    plt.rcParams["axes.titlesize"] = 8
     plt.subplot(3,2,1)
+    plt.title("u_real")
     plt.tight_layout(w_pad=2.5)
     plt.contourf(X/1e3,Y/1e3,u.real, 20)
     cv = abs(u.real).max()
@@ -66,6 +68,7 @@ for i in range(ii-2,ii+9):
     plt.setp(cl,fontsize=8)
 
     plt.subplot(3,2,2)
+    plt.title("u_imag")
     plt.contourf(X/1e3,Y/1e3,u.imag, 20)
     cv = abs(u.imag).max()
     plt.clim(-cv,cv)
@@ -74,6 +77,7 @@ for i in range(ii-2,ii+9):
     plt.setp(cl,fontsize=8)
 
     plt.subplot(3,2,3)
+    plt.title("v_real")
     plt.contourf(X/1e3,Y/1e3,v.real, 20)
     cv = abs(v.real).max()
     plt.clim(-cv,cv)
@@ -82,6 +86,7 @@ for i in range(ii-2,ii+9):
     plt.setp(cl,fontsize=8)
 
     plt.subplot(3,2,4)
+    plt.title("v_imag")
     plt.contourf(X/1e3,Y/1e3,v.imag, 20)
     cv = abs(v.imag).max()
     plt.clim(-cv,cv)
@@ -90,6 +95,7 @@ for i in range(ii-2,ii+9):
     plt.setp(cl,fontsize=8)
 
     plt.subplot(3,2,5)
+    plt.title("h_real")
     plt.contourf(X/1e3,Y/1e3,h.real, 20)
     cv = abs(h.real).max()
     plt.clim(-cv,cv)
@@ -98,6 +104,7 @@ for i in range(ii-2,ii+9):
     plt.setp(cl,fontsize=8)
 
     plt.subplot(3,2,6)
+    plt.title("h_imag")
     plt.contourf(X/1e3,Y/1e3,h.imag, 20)
     cv = abs(h.imag).max()
     plt.clim(-cv,cv)
