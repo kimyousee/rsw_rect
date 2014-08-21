@@ -17,7 +17,7 @@ def FiniteDiff(x, n, spb, uniform):
         Nx = len(x)
 
     if spb:
-        Dx = sp.lil_matrix((Nx, Nx))
+        Dx = sp.csr_matrix((Nx, Nx))
     else:
         Dx = np.zeros([Nx, Nx])
 
