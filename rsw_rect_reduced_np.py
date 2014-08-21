@@ -105,10 +105,12 @@ def rsw_rect(grid):
     # B = np.eye(A.shape[0])
 
     # Using eig
+    t0 = time.time()
     if diff_typex=='cheb':
         eigVals, eigVecs = spalg.eig(1j*A)
     else:
         eigVals, eigVecs = spalg.eig(1j*A.todense())
+    print "Time for eig:", time.time()-t0
     ind = (np.real(eigVals)).argsort() #get indices in ascending order
     eigVecs = eigVecs[:,ind]
     eigVals = eigVals[ind]
