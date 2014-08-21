@@ -46,7 +46,7 @@ om = omega.real
 om[om<=f0] = np.Inf
 ii = (abs(om)).argmin(0)
 for i in range(ii,ii+11):
-    print i,"Frequency:",eigVals[i]
+    print i,"Frequency:",eigVals[i].real
     uf = fields[0]; u = np.squeeze(uf[:,:,i])
     vf = fields[1]; v = np.squeeze(vf[:,:,i])
     hf = fields[2]; h = np.squeeze(hf[:,:,i])
