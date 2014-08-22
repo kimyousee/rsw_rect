@@ -18,7 +18,9 @@ size = PETSc.COMM_WORLD.Get_size()
 ## Builds A from nonzero values; can also use cheb or fd2
 ## Running this will create the files: eigVals, eigVecs, InputData, x, y
 ## To see the plots, run the file: python read_rsw_rect.py
+
 ## Set a target value in command line: -eps_target 1.55e-3
+## If you want to see how many have converged at each iteration, use -eps_monitor
 
 # Function for creation of chebyshev differentiation matrices
 # CHEB  compute D = differentiation matrix, x = Chebyshev grid
@@ -164,16 +166,21 @@ def rsw_rect(grid, nEV):
     HDX = -H*DX[:,Sx]
     HDY = -H*DY[:,Sy]
 
+    Print("Building A")
+    t0 = time.time()
     A = build_A(Nx,Ny,Zx,Zxx,gDX,Fxy,Fyx,gDY,HDX,HDY)
+    Print("A finished building: ",time.time()-t0)
 
     E = SLEPc.EPS(); E.create(comm=SLEPc.COMM_WORLD)
     E.setOperators(1j*A); E.setDimensions(nEV, SLEPc.DECIDE)
-    # E.setType(SLEPc.EPS.Type.LAPACK)
-    E.setProblemType(SLEPc.EPS.ProblemType.NHEP);E.setFromOptions()
+    E.setProblemType(SLEPc.EPS.ProblemType.NHEP)
     E.setWhichEigenpairs(SLEPc.EPS.Which.TARGET_REAL)
-    E.setTolerances(1e-6,max_it=25)
+    E.setTolerances(1e-6,max_it=100)
+    E.setFromOptions()
 
+    t0 = time.time()
     E.solve()
+    Print("Time for E.solve:", time.time()-t0)
 
     nconv = E.getConverged()
     vr, wr = A.getVecs()
@@ -210,24 +217,29 @@ def rsw_rect(grid, nEV):
             freq[i] = eigVal.real
 
     if rank == 0:
+        # Sorting
+        ind = (np.real(eigVals)).argsort() #get indices in ascending order
+        eigVecs = eigVecs[:,ind]
+        eigVals = eigVals[ind]
+
+        # Storing
         eigVals.tofile(eigValsFile)
         eigVecs.tofile(eigVecsFile)
         dataArr.tofile(data)
         x.tofile(xFile)
         y.tofile(yFile)
 
-        plt.plot(np.arange(0,freq.shape[0]), freq[:], 'o')
+        plt.plot(np.arange(0,eigVals.real.shape[0]), eigVals[:].real, 'o')
         plt.title("petsc4py/slepc4py Plot of Real Part of Eigenvalues")
         plt.show()
 
     eigValsFile.close; eigVecsFile.close(); data.close(); xFile.close(); yFile.close()
     
-
 if __name__ == '__main__':
     opts = PETSc.Options()
     Nx = opts.getInt('Nx', 10)
     Ny = opts.getInt('Ny', 10)
-    nEV = opts.getInt('nev', 400) # increase with more grid points
+    nEV = opts.getInt('nev', 25) # increase with more grid points
 
     grid = np.array([Nx,Ny])
     rsw_rect(grid,nEV)
